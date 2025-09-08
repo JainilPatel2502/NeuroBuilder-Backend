@@ -114,7 +114,6 @@ async def websocket_train(websocket: WebSocket):
 
         for epoch in range(model_data.epochs):
             total_train_loss = 0
-            model.train()
             for x, y in data_warehouse.trainloader:
                 pred = model(x)
                 y = y.long() if isinstance(lossfn, nn.CrossEntropyLoss) else y.float().view(-1, 1)
@@ -125,7 +124,6 @@ async def websocket_train(websocket: WebSocket):
                 total_train_loss += loss.item()
 
             total_test_loss = 0
-            model.eval()
             with torch.no_grad():
                 for x, y in data_warehouse.testloader:
                     pred = model(x)
