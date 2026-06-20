@@ -3,10 +3,11 @@ from Data.get_regression_dataset import MyRegressionDataset
 from Data.get_splited import get_split
 import pandas as pd
 from torch.utils.data import DataLoader
+from helpers import UPLOAD
 class Datahandler:
-    def __init__(self,projname:str , type , split,batch_size):
-        self.df=pd.read_csv(f'./Projects/{projname}.csv')
-        self.train, self.test = get_split(self.df,split)  
+    def __init__(self,projname:str , type , train_split,batch_size):
+        self.df=pd.read_csv(f'{UPLOAD}/{projname}.csv')
+        self.train, self.test = get_split(self.df,train_split)  
         if type=='classification':
             self.traindataset = MyClassificationDataset(self.train)
             self.testdataset = MyClassificationDataset(self.test)

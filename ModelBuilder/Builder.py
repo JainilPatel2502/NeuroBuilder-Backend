@@ -36,6 +36,8 @@ def create_layers(no_of_layers, formatted_layer, activations, initializations):
             layers.append(nn.Tanh())
         elif activations[i] == "Softmax":
             layers.append(nn.Softmax(dim=1))
+        elif activations[i] == "Swish":
+            layers.append(nn.SiLU())
         elif activations[i] == "LeakyReLU":
             layers.append(nn.LeakyReLU())
         elif activations[i]=='None':
@@ -47,7 +49,7 @@ def create_layers(no_of_layers, formatted_layer, activations, initializations):
 
 def model_builder(input_size,data):
     formated =  layer_fromater(input_size,data['neuronsPerLayer'])
-    layers = create_layers(data['layers'],formated,data['actiavtionsPerLayer'],data['initializationPerLayer'])
+    layers = create_layers(data['layers'],formated,data['activationsPerLayer'],data['initializationPerLayer'])
     model = ModelClass(layers)
     return  model
 
@@ -60,7 +62,7 @@ def model_builder(input_size,data):
 #         3,
 #         1
 #     ],
-#     "actiavtionsPerLayer": [
+#     "activationsPerLayer": [
 #         "PReLU",
 #         "ReLU",
 #         "TanH",
@@ -75,7 +77,7 @@ def model_builder(input_size,data):
 #     "regularization": "L2",
 #     "lr": 0.01,
 #     "lossFn": "MAE",
-#     "optimzer": "Adam",
+#     "optimizer": "Adam",
 #     "epochs": 100
 # }
 # print(model_builder(data))
