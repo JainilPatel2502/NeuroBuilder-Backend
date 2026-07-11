@@ -53,4 +53,5 @@ class ModelData(BaseModel):
 class Train(BaseModel):
     data: ProjectRequest
     model_info: ModelData
-    token: str
+    token: Optional[str] = None
+

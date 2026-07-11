@@ -23,8 +23,12 @@ def regularization_penalty(model: nn.Module, regularization: str, weight: float)
     return torch.tensor(0.0)
 
 
-async def run_training(websocket: WebSocket, body: Train, current_user: models.User, db: Session):
-    """Execute the full training loop, streaming progress over the WebSocket."""
+import json
+import asyncio
+from typing import AsyncGenerator
+
+async def run_training(body: Train, current_user: models.User, db: Session) -> AsyncGenerator[str, None]:
+    """Execute the full training loop, streaming progress over Server-Sent Events (SSE)."""
     project = (
         db.query(models.Project)
         .filter(models.Project.name == body.data.project_name, models.Project.user_id == current_user.id)
@@ -32,8 +36,7 @@ async def run_training(websocket: WebSocket, body: Train, current_user: models.U
     )
     if not project:
         logger.warning("Training aborted: Project '%s' not found for user %s", body.data.project_name, current_user.email)
-        await websocket.send_json({"error": "Project not found"})
-        await websocket.close()
+        yield f"data: {json.dumps({'error': 'Project not found'})}\n\n"
         return
 
     proj_type = body.data.type
@@ -50,59 +53,70 @@ async def run_training(websocket: WebSocket, body: Train, current_user: models.U
     lossfn = get_loss_fn(model_data.lossFn)
     if lossfn is None:
         logger.error("Invalid loss function requested: %s", model_data.lossFn)
-        await websocket.send_json({"error": f"Invalid loss function: {model_data.lossFn}"})
+        yield f"data: {json.dumps({'error': f'Invalid loss function: {model_data.lossFn}'})}\n\n"
         return
 
     optimizer = get_optimizer(model.parameters(), model_data.optimizer, model_data.lr)
     if optimizer is None:
         logger.error("Invalid optimizer requested: %s", model_data.optimizer)
-        await websocket.send_json({"error": f"Invalid optimizer: {model_data.optimizer}"})
+        yield f"data: {json.dumps({'error': f'Invalid optimizer: {model_data.optimizer}'})}\n\n"
         return
 
     train_losses = []
     test_losses = []
     reg_weight = model_data.regularizationStrength
 
-    for epoch in range(model_data.epochs):
-        total_train_loss = 0
-        for x, y in data_warehouse.trainloader:
-            pred = model(x)
-            y = y.long() if isinstance(lossfn, nn.CrossEntropyLoss) else y.float().view(-1, 1)
-            loss = lossfn(pred, y)
-            loss = loss + regularization_penalty(model, model_data.regularization, reg_weight)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_train_loss += loss.item()
-
-        total_test_loss = 0
-        with torch.no_grad():
-            for x, y in data_warehouse.testloader:
+    try:
+        for epoch in range(model_data.epochs):
+            total_train_loss = 0
+            for x, y in data_warehouse.trainloader:
                 pred = model(x)
                 y = y.long() if isinstance(lossfn, nn.CrossEntropyLoss) else y.float().view(-1, 1)
                 loss = lossfn(pred, y)
                 loss = loss + regularization_penalty(model, model_data.regularization, reg_weight)
-                total_test_loss += loss.item()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                total_train_loss += loss.item()
 
-        train_losses.append(total_train_loss)
-        test_losses.append(total_test_loss)
+            total_test_loss = 0
+            with torch.no_grad():
+                for x, y in data_warehouse.testloader:
+                    pred = model(x)
+                    y = y.long() if isinstance(lossfn, nn.CrossEntropyLoss) else y.float().view(-1, 1)
+                    loss = lossfn(pred, y)
+                    loss = loss + regularization_penalty(model, model_data.regularization, reg_weight)
+                    total_test_loss += loss.item()
 
-        if (epoch + 1) % 10 == 0 or epoch == 0 or epoch == model_data.epochs - 1:
-            logger.info("Epoch [%d/%d] - Train Loss: %.4f, Test Loss: %.4f", 
-                        epoch + 1, model_data.epochs, total_train_loss, total_test_loss)
+            train_losses.append(total_train_loss)
+            test_losses.append(total_test_loss)
 
-        await websocket.send_json({
-            "epoch": epoch + 1,
-            "train_loss": total_train_loss,
-            "test_loss": total_test_loss,
-            "message": f"Epoch [{epoch+1}/{model_data.epochs}], Train: {total_train_loss:.4f}, Test: {total_test_loss:.4f}",
-        })
+            if (epoch + 1) % 10 == 0 or epoch == 0 or epoch == model_data.epochs - 1:
+                logger.info("Epoch [%d/%d] - Train Loss: %.4f, Test Loss: %.4f", 
+                            epoch + 1, model_data.epochs, total_train_loss, total_test_loss)
 
-    logger.info("Training completed successfully for user %s on project '%s'", current_user.email, project.name)
-    await websocket.send_json({
-        "message": "Training completed successfully",
-        "train_losses": train_losses,
-        "test_losses": test_losses,
-    })
+            yield f"data: {json.dumps({
+                'epoch': epoch + 1,
+                'train_loss': total_train_loss,
+                'test_loss': total_test_loss,
+                'message': f'Epoch [{epoch+1}/{model_data.epochs}], Train: {total_train_loss:.4f}, Test: {total_test_loss:.4f}',
+            })}\n\n"
+            # Yield control to the event loop
+            await asyncio.sleep(0.001)
 
-    await websocket.close()
+        logger.info("Training completed successfully for user %s on project '%s'", current_user.email, project.name)
+        yield f"data: {json.dumps({
+            'message': 'Training completed successfully',
+            'train_losses': train_losses,
+            'test_losses': test_losses,
+        })}\n\n"
+
+    except asyncio.CancelledError:
+        logger.info("Training cancelled for user %s on project '%s'", current_user.email, project.name)
+        raise
+    except Exception as e:
+        logger.error("Unexpected error in run_training: %s", str(e), exc_info=True)
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    finally:
+        logger.info("Training stream session closed for user %s", current_user.email)
+

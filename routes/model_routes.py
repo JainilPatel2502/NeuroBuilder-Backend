@@ -1,5 +1,6 @@
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 import auth
@@ -28,28 +29,14 @@ def model(data: ModelData, current_user: models.User = Depends(auth.get_current_
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.websocket("/ws/train")
-async def websocket_train(websocket: WebSocket, db: Session = Depends(auth.get_db)):
-    await websocket.accept()
-    logger.info("New websocket connection accepted for training")
-    try:
-        body = await websocket.receive_json()
-        body = Train(**body)
-
-        try:
-            current_user = auth.get_current_user(body.token, db)
-        except HTTPException:
-            logger.warning("Unauthorized websocket connection attempt")
-            await websocket.send_json({"error": "Unauthorized"})
-            await websocket.close()
-            return
-
-        logger.info("User %s initiated training for project '%s'", current_user.email, body.data.project_name)
-        await run_training(websocket, body, current_user, db)
-
-    except WebSocketDisconnect:
-        logger.info("Client disconnected during training")
-    except Exception as e:
-        logger.error("Unexpected error in websocket_train: %s", str(e), exc_info=True)
-        await websocket.send_json({"error": str(e)})
-        await websocket.close()
+@router.post("/train")
+async def train_model(
+    body: Train,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(auth.get_db),
+):
+    logger.info("User %s initiated training for project '%s'", current_user.email, body.data.project_name)
+    return StreamingResponse(
+        run_training(body, current_user, db),
+        media_type="text/event-stream"
+    )
